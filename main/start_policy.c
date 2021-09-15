@@ -153,6 +153,8 @@ int policy_change_black_list(__u32 ip, int action)
 		return err;
 	}
 	//==========================================================
+	char src_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &ip, src_str, INET_ADDRSTRLEN);
 	if(action == BLOCK)
 	{
 		unsigned int nr_cpus = bpf_num_possible_cpus();
@@ -161,7 +163,7 @@ int policy_change_black_list(__u32 ip, int action)
 		int res = bpf_map_update_elem(black_list_map, &ip, values, BPF_ANY);
 		if(res == 0)
 		{
-			printf("Added IP to BLACK LIST\n");
+			printf("Added %s to BLACK LIST\n", src_str);
 		}
 	}
 	else if (action == UNBLOCK)
@@ -169,7 +171,7 @@ int policy_change_black_list(__u32 ip, int action)
 		int res = bpf_map_delete_elem(black_list_map, &ip);
 		if(res == 0)
 		{
-			printf("Removed IP from BLACK LIST\n");
+			printf("Removed %s from BLACK LIST\n", src_str);
 		}
 	}
 	else
@@ -232,7 +234,7 @@ int detect_attackers()
 				{
 					char src_str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &psi[i].ip[0][j], src_str, INET_ADDRSTRLEN);
-					printf("[DETECT] POLICY ID: %d, message: IP: %s sent %d(pps) >> %d(pps)\n", list_policy[i].id, src_str, psi[i].ip[1][j], list_policy[i].threshold);
+					printf("[DETECT] POLICY ID: %d, message: IP: %s sent %d(pps) > %d(pps)\n", list_policy[i].id, src_str, psi[i].ip[1][j], list_policy[i].threshold);
 					//Block IP
 					policy_change_black_list(psi[i].ip[0][j], BLOCK);
 					sleep(3);
