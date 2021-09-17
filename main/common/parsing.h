@@ -104,7 +104,7 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *nh,
 	if(len < sizeof(*h))
 		return -1;
 
-	//Kiem tra goi hop le
+	//Tinh toan do dai TCP header
 	if (nh->pos + len > data_end)
 		return -1;
 
