@@ -61,14 +61,14 @@ int  xdp_parser_func(struct xdp_md *ctx)
 			//Kiem tra IP co nam trong WHITE_LIST
 			if (in_white_list(iphdr->saddr))
 			{
-				bpf_printk("[PASS] %u ---> %u : IP in WHITE LIST\n", bpf_htonl(iphdr->saddr), bpf_htonl(iphdr->saddr));
+				bpf_printk("action: PASS, src: %u, dst: %u, reason_1: IP in WHITE LIST\n", iphdr->saddr, iphdr->daddr);
 				return XDP_PASS;
 			}
 
 			//Kiem tra IP co nam trong BLACK_LIST
 			if (in_black_list(iphdr->saddr))
 			{
-				bpf_printk("[DROP] %u ---> %u IP in BLACK LIST\n", bpf_htonl(iphdr->saddr), bpf_htonl(iphdr->saddr));
+				bpf_printk("action: DROP, src: %u, dst: %u, reason_1: IP in BLACK LIST\n", iphdr->saddr, iphdr->daddr);
 				return XDP_DROP;
 			}
 

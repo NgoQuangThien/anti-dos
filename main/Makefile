@@ -2,6 +2,9 @@
 
 XDP_TARGETS  := xdp_prog_kern
 USER_TARGETS := xdp_loader
+USER_TARGETS += trace_read
+USER_TARGETS += update_list
+USER_TARGETS += xdp_stats
 USER_TARGETS += start_policy
 
 LIBBPF_DIR = ../libbpf/src/
