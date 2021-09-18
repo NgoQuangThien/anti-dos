@@ -17,6 +17,8 @@ static const char *__doc__ = "XDP stats program\n"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/sysinfo.h>
+#include <unistd.h>
+#include <time.h>
 
 #include "../common/common_params.h"
 #include "common/policy_struct_kern_user.h"
@@ -44,7 +46,9 @@ static const struct option_wrapper long_options[] = {
 #define MAX_CPU 128
 #define NS_IN_SEC 1000000000
 #define PAGE_CNT 8
+
 #define INTERVAL 1
+#define LOCK_TIME 5
 
 #define BLOCK 1
 #define UNBLOCK 0
@@ -54,7 +58,7 @@ struct bpf_map_info map_expect = { 0 };
 struct bpf_map_info info = { 0 };
 char pin_dir[PATH_MAX];
 
-//===================================================================================================
+//==================================================
 struct perf_event_sample {
 	struct perf_event_header header;
 	__u64 timestamp;
@@ -79,18 +83,20 @@ int policy_len;
 struct perf_event_sample packets_queue[3000000];
 int packets_queue_len;
 
-__u64 time_start;
-__u64 time_end;
+unsigned long time_start;
+unsigned long time_end;
 
 struct policy_stats_ip
 {
-	__u32 ip[2][1000];
+	//Hang 0 chua IP, hang 1 chua so lan gui goi tin
+	__u32 ip[2][100];
 	__u32 num_ip;
 };
 
+#define IP_DYNAMIC 100
+__u32 count_down[2][IP_DYNAMIC];
 
-//===================================================================================================
-
+//======================================================
 void meta_print(struct pkt_meta meta, __u64 timestamp)
 {
 	char src_str[INET_ADDRSTRLEN];
@@ -134,8 +140,7 @@ int policy_change_black_list(__u32 ip, int action)
 {
 	int err;
 
-	//========================================================================================
-
+	//============================================================
 	int black_list_map;
 
 	black_list_map = open_bpf_map_file(pin_dir, "black_list", &info);
@@ -163,7 +168,7 @@ int policy_change_black_list(__u32 ip, int action)
 		int res = bpf_map_update_elem(black_list_map, &ip, values, BPF_ANY);
 		if(res == 0)
 		{
-			printf("Added %s to BLACK LIST\n", src_str);
+			printf("[ADDED] IP:  %s to BLACK LIST\n", src_str);
 		}
 	}
 	else if (action == UNBLOCK)
@@ -171,7 +176,7 @@ int policy_change_black_list(__u32 ip, int action)
 		int res = bpf_map_delete_elem(black_list_map, &ip);
 		if(res == 0)
 		{
-			printf("Removed %s from BLACK LIST\n", src_str);
+			printf("[REMOVED] IP: %s from BLACK LIST\n", src_str);
 		}
 	}
 	else
@@ -185,7 +190,7 @@ int policy_change_black_list(__u32 ip, int action)
 
 int detect_attackers()
 {	
-	int i, j, k;
+	int i, j, k, g;
 	struct policy_stats_ip psi[policy_len];
 	int num_ip = 0;
 	int flag = 0;
@@ -227,19 +232,30 @@ int detect_attackers()
 	{
 		for(j = 0; j<psi[i].num_ip; j++)
 		{
-			//Duyet cac policy co IP vi pham
+			//Duyet cac policy co IP
 			if(psi[i].num_ip != 0 )
 			{
-				if(psi[i].ip[1][j] > list_policy[i].threshold)
+				//Xu ly IP vi pham
+				if((psi[i].ip[1][j]/INTERVAL) > list_policy[i].threshold)
 				{
+					unsigned long now = (unsigned long)time(NULL);
 					char src_str[INET_ADDRSTRLEN];
+					char dst_str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &psi[i].ip[0][j], src_str, INET_ADDRSTRLEN);
-					printf("[DETECT] POLICY ID: %d, message: IP: %s sent %d(pps) > %d(pps)\n", list_policy[i].id, src_str, psi[i].ip[1][j], list_policy[i].threshold);
+					inet_ntop(AF_INET, &list_policy[i].ip, dst_str, INET_ADDRSTRLEN);
+					printf("[DETECTED] policy.id: %d, source.ip: %s, destination.ip: %s, event.reason: sent %d(pps) > %d(pps)\n", list_policy[i].id, src_str, dst_str, psi[i].ip[1][j]/INTERVAL, list_policy[i].threshold);
 					//Block IP
 					policy_change_black_list(psi[i].ip[0][j], BLOCK);
-					sleep(3);
-					//Unblock IP
-					policy_change_black_list(psi[i].ip[0][j], UNBLOCK);
+					for(g = 0; g < IP_DYNAMIC; g++)
+					{
+						//Vi tri chua co IP
+						if(count_down[0][g] == 0)
+						{
+							count_down[0][g] = psi[i].ip[0][j];
+							count_down[1][g] = now;
+							break;
+						}
+					}
 				}
 			}
 		}
@@ -253,34 +269,10 @@ int event_printer(struct perf_event_sample *sample)
 {
 	// meta_print(sample->meta, sample->timestamp);
 
-	//Ban dau time_start va time_end = 0
-	if(time_start == 0)
-	{
-		//Dat time_end de bat dau tinh thoi gian
-		time_start = sample->timestamp/NS_IN_SEC;
-	}
-	
-	//Gan thoi gian bat goi tin
-	time_end = sample->timestamp/NS_IN_SEC;
-	//Bat va xu ly cac goi tin trong khoang thoi gian xac dinh
-	if ((time_end - time_start) < INTERVAL)
-	{
-		//Ghi thong tin goi in
-		packets_queue[packets_queue_len].meta = sample->meta;
-		packets_queue_len++;
-		goto out;
-	}
-	
-	//=========================================================================
-	//Check Polcy and response
-	detect_attackers();
-	//=========================================================================
-	//Ket thuc viec bat cac goi tin trong khoang thoi gian giay vua qua
-	time_start = 0;
-	memset(packets_queue, 0, sizeof(packets_queue));
-	packets_queue_len = 0;
+	//Ghi thong tin goi in
+	packets_queue[packets_queue_len].meta = sample->meta;
+	packets_queue_len++;
 
-out:
 	return LIBBPF_PERF_EVENT_CONT;
 }
 
@@ -317,6 +309,64 @@ int event_poller(struct perf_event_mmap_page **mem_buf, int *sys_fds,
 	for (;;) {
 		/* Poll fds for events, 250ms timeout */
 		poll(poll_fds, cpu_total, 250);
+		//==================================================
+		// Bat dau tinh thoi gian
+		unsigned long now = (unsigned long)time(NULL);
+		if(time_start == 0)
+		{
+			time_start = now;
+		}
+
+		//Gan thoi gian bat goi tin
+		time_end = now;
+
+		//Bat va xu ly cac goi tin trong khoang thoi gian xac dinh
+		if ((time_end - time_start) == INTERVAL)
+		{
+			//Check Polcy and response
+			detect_attackers();
+
+			//Reset thong ke goi tin
+			time_start = 0;
+			memset(packets_queue, 0, sizeof(packets_queue));
+			packets_queue_len = 0;
+
+			if(INTERVAL == 1)
+			{
+				for(int i = 0; i < IP_DYNAMIC; i++)
+				{
+					if(count_down[0][i] != 0)
+					{
+						//Bo qua neu IP chua het thoi gian khoa
+						if((now - count_down[1][i]) < LOCK_TIME)
+							continue;
+
+						//Unlock IP het thoi gian khoa
+						policy_change_black_list(count_down[0][i], UNBLOCK);
+						//Xoa IP khoi danh sach 
+						count_down[0][i] = 0;
+					}
+				}
+			}
+		}
+		else
+		{
+			for(int i = 0; i < IP_DYNAMIC; i++)
+			{
+				if(count_down[0][i] != 0)
+				{
+					//Bo qua neu IP chua het thoi gian khoa
+					if((now - count_down[1][i]) < LOCK_TIME)
+						continue;
+
+					//Unlock IP het thoi gian khoa
+					policy_change_black_list(count_down[0][i], UNBLOCK);
+					//Xoa IP khoi danh sach 
+					count_down[0][i] = 0;
+				}
+			}
+		}
+		//==================================================
 
 		for (n = 0; n < cpu_total; n++) {
 			if (poll_fds[n].revents) { /* events found */
@@ -424,7 +474,9 @@ int main(int argc, char **argv)
 {
 	int len, err;
 
-	//========================================================================================
+	memset(count_down, 0, sizeof(count_down));
+
+	//=====================================================
 	static struct perf_event_mmap_page *mem_buf[MAX_CPU];
 
 	int sys_fds[MAX_CPU];
@@ -434,7 +486,7 @@ int main(int argc, char **argv)
 
 	xdp_flags = XDP_FLAGS_SKB_MODE; /* default to DRV */
 	n_cpus = get_nprocs();
-	//========================================================================================
+	//======================================================
 
 	struct config cfg = {
 		.ifindex   = -1,
