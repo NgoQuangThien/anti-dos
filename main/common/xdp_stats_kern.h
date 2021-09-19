@@ -31,14 +31,15 @@ __u32 xdp_stats_record_action(struct xdp_md *ctx, __u32 action, struct pkt_meta 
 	if (action >= XDP_ACTION_MAX)
 		return XDP_ABORTED;
 
-	/* Lookup in kernel BPF-side return pointer to actual data record */
 	struct datarec *rec = bpf_map_lookup_elem(&xdp_stats_map, &action);
 	if (!rec)
 		return XDP_ABORTED;
 
+	//Tinh so goi tin, so bytes da nhan
 	rec->rx_packets++;
 	rec->rx_bytes += (ctx->data_end - ctx->data);
 
+	//Gui thong tin nhung goi PASS len Userspace program
 	if (action != XDP_PASS)
 		goto out;
 	

@@ -85,6 +85,7 @@ int packets_queue_len;
 
 unsigned long time_start;
 unsigned long time_end;
+unsigned long prev_time;
 
 struct policy_stats_ip
 {
@@ -168,7 +169,7 @@ int policy_change_black_list(__u32 ip, int action)
 		int res = bpf_map_update_elem(black_list_map, &ip, values, BPF_ANY);
 		if(res == 0)
 		{
-			printf("[ADDED] IP:  %s to BLACK LIST\n", src_str);
+			printf("[ADDED] IP: %s to BLACK LIST\n", src_str);
 		}
 	}
 	else if (action == UNBLOCK)
@@ -201,11 +202,13 @@ int detect_attackers()
 	// Duyet qua tung packet
 	for (i = 0; i < packets_queue_len; i++)
 	{
+		// Duyet qua tung policy
 		for(j = 0; j < policy_len; j++)
 		{
+			// Phat hien IP dich nam trong policy
 			if(packets_queue[i].meta.dst == list_policy[j].ip)
 			{
-				//Khi mang khong con trong
+				//Khi mang khong trong
 				for(k = 0; k < psi[j].num_ip; k++)
 				{
 					if(packets_queue[i].meta.src == psi[j].ip[0][k])
@@ -215,7 +218,7 @@ int detect_attackers()
 						break;
 					}
 				}
-				//Neu khong ton tai trong mang
+				//Neu IP khong ton tai trong mang
 				if(flag == 0)
 				{
 					psi[j].ip[0][num_ip] = packets_queue[i].meta.src;
@@ -243,7 +246,9 @@ int detect_attackers()
 					char dst_str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &psi[i].ip[0][j], src_str, INET_ADDRSTRLEN);
 					inet_ntop(AF_INET, &list_policy[i].ip, dst_str, INET_ADDRSTRLEN);
-					printf("[DETECTED] policy.id: %d, source.ip: %s, destination.ip: %s, event.reason: sent %d(pps) > %d(pps)\n", list_policy[i].id, src_str, dst_str, psi[i].ip[1][j]/INTERVAL, list_policy[i].threshold);
+					printf("[DETECTED] policy.id: %d, source.ip: %s, destination.ip: %s, event.reason: sent %d(pps) > %d(pps)\n",	\
+							list_policy[i].id, src_str, dst_str, psi[i].ip[1][j]/INTERVAL, 											\
+							list_policy[i].threshold);										
 					//Block IP
 					policy_change_black_list(psi[i].ip[0][j], BLOCK);
 					for(g = 0; g < IP_DYNAMIC; g++)
@@ -265,7 +270,7 @@ int detect_attackers()
 	return 0;
 }
 
-int event_printer(struct perf_event_sample *sample)
+int policy_stats(struct perf_event_sample *sample)
 {
 	// meta_print(sample->meta, sample->timestamp);
 
@@ -309,12 +314,14 @@ int event_poller(struct perf_event_mmap_page **mem_buf, int *sys_fds,
 	for (;;) {
 		/* Poll fds for events, 250ms timeout */
 		poll(poll_fds, cpu_total, 250);
+
 		//==================================================
 		// Bat dau tinh thoi gian
 		unsigned long now = (unsigned long)time(NULL);
-		if(time_start == 0)
+		if(time_start == 0 || prev_time == 0)
 		{
 			time_start = now;
+			prev_time = now;
 		}
 
 		//Gan thoi gian bat goi tin
@@ -323,33 +330,17 @@ int event_poller(struct perf_event_mmap_page **mem_buf, int *sys_fds,
 		//Bat va xu ly cac goi tin trong khoang thoi gian xac dinh
 		if ((time_end - time_start) == INTERVAL)
 		{
-			//Check Polcy and response
+			//Kiem tra vi pham chinh sach
 			detect_attackers();
 
 			//Reset thong ke goi tin
-			time_start = 0;
+			time_start = time_end;
 			memset(packets_queue, 0, sizeof(packets_queue));
 			packets_queue_len = 0;
-
-			if(INTERVAL == 1)
-			{
-				for(int i = 0; i < IP_DYNAMIC; i++)
-				{
-					if(count_down[0][i] != 0)
-					{
-						//Bo qua neu IP chua het thoi gian khoa
-						if((now - count_down[1][i]) < LOCK_TIME)
-							continue;
-
-						//Unlock IP het thoi gian khoa
-						policy_change_black_list(count_down[0][i], UNBLOCK);
-						//Xoa IP khoi danh sach 
-						count_down[0][i] = 0;
-					}
-				}
-			}
 		}
-		else
+
+		//Dinh ky moi giay quet trang thai Block 1 lan
+		if((time_end - prev_time) == 1)
 		{
 			for(int i = 0; i < IP_DYNAMIC; i++)
 			{
@@ -365,6 +356,7 @@ int event_poller(struct perf_event_mmap_page **mem_buf, int *sys_fds,
 					count_down[0][i] = 0;
 				}
 			}
+			prev_time = time_end;
 		}
 		//==================================================
 
@@ -375,7 +367,7 @@ int event_poller(struct perf_event_mmap_page **mem_buf, int *sys_fds,
 								 pagesize,
 								 &buf, &len,
 								 event_received,
-								 event_printer);
+								 policy_stats);
 				if (res != LIBBPF_PERF_EVENT_CONT)
 					break;
 			}
@@ -444,7 +436,7 @@ int load_policy()
         inet_pton(AF_INET, ip, &list_policy[policy_len].ip);
 		if(!err)
 		{
-			printf("[Error] Cann't convert IP string\n");
+			printf("[Error] Can't convert IP string\n");
 			return 1;
 		}
         list_policy[policy_len].threshold = threshold;
@@ -457,7 +449,7 @@ int load_policy()
             inet_pton(AF_INET, ip, &list_policy[policy_len].ip);
 			if(!err)
 			{
-				printf("[Error] Cann't convert IP string\n");
+				printf("[Error] Can't convert IP string\n");
 				return 1;
 			}
             list_policy[policy_len].threshold = threshold;
